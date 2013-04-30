@@ -35,9 +35,21 @@ void main()
 end-of-shader
 )
 
-(define-type world vertex-vector)
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(define (insert-texture x y width height world)
+;;TODO 
+;; LOOK AT PRINT-LEVEL
+;; for each
+
+(define-type world (game-state unprintable:) player (tile-vector unprintable:) (sector-logic unprintable:) (vertex-vector unprintable:))
+(define-type sector-logic x y)
+(define-type player x y  (width unprintable:) (height unprintable:) horizontal-state vertical-state (lives unprintable:) gravity is-collision? is-dead? sector)
+(define (make-world/init) 
+  (make-world 'level-one (make-player 40. 650. 24. 48. 'idle 'idle  3. 'down #f #f '1) (read (open-input-file "./level-one.dat")) (make-sector-logic 0. 0.) '()))
+(define tile-size 32.)
+
+
+(define (insert-full-bmp x y width height world)
   (let ((lst (list x y 0.0 0.0
                    x (+ y height) 0.0 1.0
                    (+ x width) (+ y height) 1.0 1.0
@@ -46,12 +58,151 @@ end-of-shader
                               (append (world-vertex-vector world) 
                                       lst))))
 
+(define (insert-section-bmp x y width height section world)
+  (world-vertex-vector-set! world 
+                            (append (world-vertex-vector world) 
+                                    (list x y (+ 0.1 (* 0.25 section)) 0.0
+                                          x (+ y height) (+ 0.1 (* 0.25 section)) 1.0
+                                          (+ x width) (+ y height) (+ 0.25  (* 0.25 section)) 1.0
+                                          (+ x width) y (+ 0.25  (* 0.25 section)) 0.0 ))))
+(define (update-sector-coordinates world)
+  (case 
+   (player-sector (world-player world))
+   ((1)
+    (sector-logic-x-set! (world-sector-logic world) 0.)
+    (sector-logic-y-set! (world-sector-logic world) 0.))
+   ((2)
+    (sector-logic-x-set! (world-sector-logic world) 1280.)
+    (sector-logic-y-set! (world-sector-logic world) 0.))
+   ((3)
+    (sector-logic-x-set! (world-sector-logic world) 0.)
+    (sector-logic-y-set! (world-sector-logic world) 752.))
+   ((4)
+    (sector-logic-x-set! (world-sector-logic world) 1280.)
+    (sector-logic-y-set! (world-sector-logic world) 752.))))
+
+(define (sector-updater world)
+  (cond
+   ((and (> (player-x (world-player world)) 0)
+         (< (player-x (world-player world)) 1280.)
+         (> (player-y (world-player world)) 0)
+         (< (player-y (world-player world)) 752.))
+    (player-sector-set! (world-player world) '1))
+   ((and (> (player-x (world-player world)) 1280.)
+         (< (player-x (world-player world)) 2400.)
+         (> (player-y (world-player world)) 0)
+         (< (player-y (world-player world)) 752.))
+    (player-sector-set! (world-player world) '2))
+   ((and (> (player-x (world-player world)) 0)
+         (< (player-x (world-player world)) 1280.)
+         (> (player-y (world-player world)) 752.)
+         (< (player-y (world-player world)) 1500.))
+    (player-sector-set! (world-player world) '3))
+   ((and (> (player-x (world-player world)) 1280.)
+         (< (player-x (world-player world)) 2400.)
+         (> (player-y (world-player world)) 752.)
+         (< (player-y (world-player world)) 1504.))
+    (player-sector-set! (world-player world) '4))))
+
+(define (print-sector vec sector size world)
+  (let ((print-sector-template
+         (lambda (a b c d pos1 pos2)
+           (let recur ((counter1 a) (counter2 b))
+             (cond
+              ((and (eq? counter1 c) (eq? counter2 d))
+               (insert-section-bmp (pos1 counter2) (pos2 counter1) size size 2. world))
+              ((eq? (vector-ref (vector-ref vec counter1) counter2) 'ground)
+               (insert-section-bmp (pos1 counter2) (pos2 counter1) size size 2. world)
+               (if (eq? counter2 d) 
+                   (recur (+ counter1 1) 0)
+                   (recur counter1 (+ counter2 1))))
+              ((eq? (vector-ref (vector-ref vec counter1) counter2) 'spikes)
+               (insert-section-bmp (pos1 counter2) (pos2 counter1) size size 1. world)
+               (if (eq? counter2 d)
+                   (recur (+ counter1 1) 0)
+                   (recur counter1 (+ counter2 1))))
+              ;; ((eq? (vector-ref (vector-ref vec counter1) counter2) 'goal)
+              ;;  (cairo_set_source_rgba cr 1.0 0.0 1.0 1.0)
+              ;;  (cairo_rectangle cr (pos1 counter2) (pos2 counter1) size size)
+              ;;  (cairo_fill cr)
+              ;;  (if (eq? counter2 d)
+              ;;      (recur (+ counter1 1) 0)
+              ;;      (recur counter1 (+ counter2 1))))
+              ;; ((eq? (vector-ref (vector-ref vec counter1) counter2) 'key)
+              ;;  (cairo_set_source_rgba cr 1.0 1.0 0.0 1.0)
+              ;;  (cairo_rectangle cr (pos1 counter2) (pos2 counter1) size size)
+              ;;  (cairo_fill cr)
+              ;;  (if (eq? counter2 d)
+              ;;      (recur (+ counter1 1) 0)
+              ;;      (recur counter1 (+ counter2 1))))
+              ;; ((eq? (vector-ref (vector-ref vec counter1) counter2) 'start)
+              ;;  (cairo_set_source_rgba cr 1.0 1.0 0.0 1.0)
+              ;;  (cairo_rectangle cr (pos1 counter2) (pos2 counter1) size size)
+              ;;  (cairo_fill cr)
+              ;;  (if (eq? counter2 d)
+              ;;      (recur (+ counter1 1) 0)
+              ;;      (recur counter1 (+ counter2 1))))
+              ;; ((eq? (vector-ref (vector-ref vec counter1) counter2) 'inverter)
+              ;;  (cairo_set_source_rgba cr 1.0 0.0 1.0 1.0)
+              ;;  (cairo_rectangle cr (pos1 counter2) (pos2 counter1) size size)
+              ;;  (cairo_fill cr)
+              ;;  (if (eq? counter2 d)
+              ;;      (recur (+ counter1 1) 0)
+              ;;      (recur counter1 (+ counter2 1))))
+              (else
+               (if (eq? counter2 d) 
+                   (recur (+ counter1 1) 0) 
+                   (recur counter1 (+ counter2 1)))))))))
+   (case sector
+     ((1)
+      (print-sector-template 0 0 24 39
+                             (lambda (x) (* (exact->inexact x) size))
+                             (lambda (x) (* (exact->inexact x) size))))
+     ((2)
+      (print-sector-template 0 39 24 79
+                             (lambda (x) (-(* (exact->inexact x) size) 1280.))
+                             (lambda (x) (* (exact->inexact x) size))))
+     ((3)
+      (print-sector-template 23 0 46 40
+                             (lambda (x) (* (exact->inexact x) size))
+                             (lambda (x) (-(* (exact->inexact x) size) 752.))))
+     ((4)
+      (print-sector-template 23 39 46 79
+                             (lambda (x) (-(* (exact->inexact x) size) 1280.))
+                             (lambda (x) (-(* (exact->inexact x) size) 752.)))))))
+
+(define (print-level world)
+  (case (world-game-state world)
+    ((init-screen)
+     (insert-section-bmp 0.0 0.0 1280.0 752.0 0. world)
+     (insert-section-bmp 32.0 32.0 32.0 32.0 2. world)
+     (world-tile-vector-set! world (read (open-input-file "../editor-de-mapas/init-screen.dat")))
+     ;(print-map (world-tile-vector world) cr)
+     )
+    ((death-screen)
+     (insert-section-bmp 0.0 0.0 1280.0 752.0 0. world))
+    ((preview-level-one)
+     (insert-section-bmp 0.0 0.0 1280.0 752.0 0. world))
+    ((level-one)
+     (world-tile-vector-set! world (read (open-input-file "/data/projects/editor-de-mapas/level-one.dat")))
+     (insert-section-bmp 0.0 0.0 1280.0 752.0 0. world)
+     (insert-section-bmp 32.0 64.0 32.0 100.0 2. world)
+     ;(level-updater world)
+     ;(print-map (world-tile-vector world) cr)
+     ;(player-position-updater world cr)
+     (sector-updater world)
+     (update-sector-coordinates world)
+     (print-sector (world-tile-vector world) (player-sector (world-player world)) 32. world)
+     ;;(print-player (world-player world) cr)
+     ;(print-player-sector (world-player world) (world-sector-logic world) cr)
+     )))
+
 (define (main)
   (let ((init-screen-width 1280)
         (init-screen-height 752)
         (screen-width* (alloc-int* 1))
         (screen-height* (alloc-int* 1))
-        (world (make-world '())))
+        (world (make-world/init)))
     (when (< (SDL_Init SDL_INIT_VIDEO) 0) report: (fusion:error "Couldn't initialize SDL!"))
     ;; SDL
     (let ((win (SDL_CreateWindow
@@ -77,8 +228,9 @@ end-of-shader
         (glScissor 0 0 screen-width screen-height)
         
         ;; Insert stuff
-        (insert-texture 0.0 0.0 32.0 32.0 world)
-        
+        (insert-section-bmp 0.0 0.0 1280.0 752.0 0. world)
+        (insert-section-bmp 32.0 32.0 32.0 32.0 2. world)
+
         ;; Generate programs, buffers, textures
         (let* ((perspective-matrix (matrix:* (make-translation-matrix -1.0 1.0 0.0)
                                              (matrix:* (make-scaling-matrix (/ 2.0 screen-width) (/ -2.0 screen-height) 1.0)
@@ -97,7 +249,7 @@ end-of-shader
                (shaders (list (fusion:create-shader GL_VERTEX_SHADER vertex-shader)
                               (fusion:create-shader GL_FRAGMENT_SHADER fragment-shader)))
                (shader-program (fusion:create-program shaders))
-               (texture-image* (SDL_LoadBMP "assets/128x128green.bmp")))
+               (texture-image* (SDL_LoadBMP "assets/128x32.bmp")))
           ;; Clean up shaders once the program has been compiled and linked
           (for-each glDeleteShader shaders)
 
@@ -179,9 +331,10 @@ end-of-shader
                               (else #f)))
                            (event-loop)))
 
-                   ;; -- Game logic --                   
-                   ;;(insert-texture 0.0 0.0 20.0 20.0 world)
-                   (pp (world-vertex-vector world))
+                   ;; -- Game logic -- 
+                   ;;(world-vertex-vector-set! world '())
+                   (print-level world)
+                   ;;(pp (world-vertex-vector world))
                    ;; (let ((GLfloat*-increment
                    ;;        (lambda (n x) (GLfloat*-set! vertex-data n (+ (GLfloat*-ref vertex-data n) x)))))
                    ;;   (GLfloat*-increment 0 1.0)
@@ -205,13 +358,13 @@ end-of-shader
                    (glBindVertexArray (*->GLuint main-vao-id*))
                    ;; Update vertex data buffer
                    (glBindBuffer GL_ARRAY_BUFFER position-buffer-object-id)
-                   (glBufferSubData GL_ARRAY_BUFFER
-                                    0
-                                    (* (f32vector-length vertex-data-vector) GLfloat-size)
-                                    vertex-data)
+                   (glBufferData GL_ARRAY_BUFFER
+                                 (* (f32vector-length (list->f32vector (world-vertex-vector world))) GLfloat-size)
+                                 (f32vector->GLfloat* (list->f32vector (world-vertex-vector world)))
+                                 GL_DYNAMIC_DRAW)
                    
                    (glUseProgram shader-program)
-                   (glDrawArrays GL_QUADS 0 (/(f32vector-length vertex-data-vector)4))
+                   (glDrawArrays GL_QUADS 0 (/(f32vector-length (list->f32vector (world-vertex-vector world))) 4))
                    (glUseProgram 0)
                    (glBindVertexArray 0)
                    ;; End VAO
