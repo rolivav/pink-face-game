@@ -38,7 +38,7 @@ end-of-shader
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;TODO 
-;; DEATH, LEVELCHANGER.
+;; CAMBIAR player-death-collision CON CASE PARA QUE CHEQUEE COLISION CON TODO. ESO ES PORTALES Y LLAVES AND SHIT.
 
 (define-type world (game-state unprintable:) player (tile-vector unprintable:) (sector-logic unprintable:) (vertex-vector unprintable:))
 (define-type sector-logic x y)
@@ -379,10 +379,17 @@ end-of-shader
      (else
       (GLfloat*-set! vertex-data counter (f32vector-ref vector counter))
       (recur (+ counter 1))))))
+#;
+(define (vector-copy-f32vector vector index vertex-data-vector world)
+  (let recur ((counter index))
+    (cond
+     ((eq? counter (+ index 16)))
+     (else
+      (f32-vector-set! vertex-data-vector counter (f32vector-ref vector (- counter index)))
+      (recur (+ counter 1))))))
 
 (define (create-level vertex-data world)
   (world-tile-vector-set! world (read (open-input-file "/data/projects/editor-de-mapas/level-one.dat")))
-  (player-init vertex-data world)
   (update-sector-vector (player-sector (world-player world)) vertex-data world)
   (player-position-updater vertex-data world))
 
@@ -394,7 +401,7 @@ end-of-shader
      (player-x-set! (world-player world) 40.)
      (player-y-set! (world-player world) 650.)
      (player-gravity-set! (world-player world) 'down)
-     (player-lives-set! (world-player world) (- (player-lives (world-player world)) 1.))
+     ;;(player-lives-set! (world-player world) (- (player-lives (world-player world)) 1.))
      (when (< (player-lives (world-player world)) 0.)
            (world-game-state-set! world 'game-over)))
     ((game-over)
