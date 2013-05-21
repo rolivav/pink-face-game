@@ -38,13 +38,14 @@ end-of-shader
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;TODO 
-;; CAMBIAR player-death-collision CON CASE PARA QUE CHEQUEE COLISION CON TODO. ESO ES PORTALES Y LLAVES AND SHIT.
+;;ANIMACIONES 
 
-(define-type world (game-state unprintable:) player (tile-vector unprintable:) (sector-logic unprintable:) (vertex-vector unprintable:))
+(define-type world (game-state unprintable:) player (tile-vector unprintable:) (sector-logic unprintable:) (vertex-vector unprintable:) (sounds unprintable:))
+(define-type sounds jump-sound* touch-ground-sound* explosion-sound*)
 (define-type sector-logic x y)
 (define-type player x y  (width unprintable:) (height unprintable:) horizontal-state vertical-state lives gravity is-collision? is-dead? sector)
 (define (make-world/init) 
-  (make-world 'init-screen (make-player 40. 650. 24. 48. 'idle 'idle  3. 'down #f #f '1) (read (open-input-file "level-one.dat")) (make-sector-logic 0. 0.) '()))
+  (make-world 'init-screen (make-player 40. 650. 24. 48. 'idle 'idle  3. 'down #f #f '1) (read (open-input-file "level-one.dat")) (make-sector-logic 0. 0.) '() (make-sounds 0. 0. 0.)))
 (define tile-size 32.)
 
 
@@ -60,29 +61,26 @@ end-of-shader
 (define (insert-section-bmp x y width height section world)
   (world-vertex-vector-set! world 
                             (append (world-vertex-vector world) 
-                                    (list x y (+ 0.1 (* 0.25 section)) 0.0
-                                          x (+ y height) (+ 0.1 (* 0.25 section)) 1.0
-                                          (+ x width) (+ y height) (+ 0.25  (* 0.25 section)) 1.0
-                                          (+ x width) y (+ 0.25  (* 0.25 section)) 0.0 ))))
-
+                                    (list x y (* 0.0625 section) 0.1875
+                                          x (+ y height) (* 0.0625 section) 0.25
+                                          (+ x width) (+ y height) (+ (* 0.0625 section) 0.0625) 0.25
+                                          (+ x width) y (+ 0.25  (* 0.0625 section)) 0.1875))))
+;;0,0625
+;;0,0365
 (define (player-init vertex-data world)
   (begin
-    (GLfloat*-set! vertex-data 9008 (player-x (world-player world)))
-    (GLfloat*-set! vertex-data 9009 (player-y (world-player world)))
-    (GLfloat*-set! vertex-data 9010 (+ 0.1 (* 0.25 3.)))
+    ;;Vertice 1
+    (GLfloat*-set! vertex-data 9010 0.0)
     (GLfloat*-set! vertex-data 9011 0.0)
-    (GLfloat*-set! vertex-data 9012 (player-x (world-player world)))
-    (GLfloat*-set! vertex-data 9013 (+ (player-y (world-player world)) (player-height (world-player world))))
-    (GLfloat*-set! vertex-data 9014 (+ 0.1 (* 0.25 3.)))
-    (GLfloat*-set! vertex-data 9015 1.0)
-    (GLfloat*-set! vertex-data 9016 (+ (player-x (world-player world)) (player-width (world-player world))))
-    (GLfloat*-set! vertex-data 9017 (+ (player-y (world-player world)) (player-height (world-player world))))
-    (GLfloat*-set! vertex-data 9018 (+ 0.25  (* 0.25 3.)))
-    (GLfloat*-set! vertex-data 9019 1.0)
-    (GLfloat*-set! vertex-data 9020 (+ (player-x (world-player world)) (player-width (world-player world))))
-    (GLfloat*-set! vertex-data 9021 (player-y (world-player world)))
-    (GLfloat*-set! vertex-data 9022 (+ 0.25  (* 0.25 3.)))
-    (GLfloat*-set! vertex-data 9023 0.0)))
+    ;;Vertice 2
+    (GLfloat*-set! vertex-data 9014 0.05)
+    (GLfloat*-set! vertex-data 9015 0.0)
+    ;;Vertice 3
+    (GLfloat*-set! vertex-data 9018 0.05)
+    (GLfloat*-set! vertex-data 9019 0.0625)
+    ;;Vertice 4
+    (GLfloat*-set! vertex-data 9022 0.014)
+    (GLfloat*-set! vertex-data 9023 0.0625)))
 
 (define (update-sector-coordinates world)
   (case 
@@ -185,6 +183,7 @@ end-of-shader
             (eq? (vector-ref (vector-ref (world-tile-vector world) 
                                          (inexact->exact(floor (/ (+(player-y (world-player world)) (player-height (world-player world))) tile-size)))) 
                              (inexact->exact(ceiling (/ (-(player-x (world-player world)) 3.) tile-size)))) 'spikes))
+       ;; (Mix_PlayChannel 1 explosion-sound* 0)
         (player-is-dead?-set! (world-player world) #t)))
 
 
@@ -238,10 +237,10 @@ end-of-shader
 (define (player-sector-updater vertex-data world)
   (begin
     (GLfloat*-set! vertex-data 9008 (- (player-x (world-player world)) (sector-logic-x (world-sector-logic world))))
-    (GLfloat*-set! vertex-data 9009 (- (player-y (world-player world)) (sector-logic-y (world-sector-logic world))))
-    (GLfloat*-set! vertex-data 9012 (- (+ (player-x (world-player world)) (player-width (world-player world))) (sector-logic-x (world-sector-logic world))))
-    (GLfloat*-set! vertex-data 9013 (- (player-y (world-player world)) (sector-logic-y (world-sector-logic world))))
-    (GLfloat*-set! vertex-data 9016 (- (+ (player-x (world-player world)) (player-width (world-player world))) (sector-logic-x (world-sector-logic world))))
+    (GLfloat*-set! vertex-data 9009 (- (- (+ (player-y (world-player world)) (player-height (world-player world))) 48.) (sector-logic-y (world-sector-logic world))))
+    (GLfloat*-set! vertex-data 9012 (- (+ (player-x (world-player world)) 32.) (sector-logic-x (world-sector-logic world))))
+    (GLfloat*-set! vertex-data 9013 (- (- (+ (player-y (world-player world)) (player-height (world-player world))) 48.) (sector-logic-y (world-sector-logic world))))
+    (GLfloat*-set! vertex-data 9016 (- (+ (player-x (world-player world)) 32.) (sector-logic-x (world-sector-logic world))))
     (GLfloat*-set! vertex-data 9017 (- (+ (player-y (world-player world)) (player-height (world-player world)))(sector-logic-y (world-sector-logic world))))
     (GLfloat*-set! vertex-data 9020 (- (player-x (world-player world)) (sector-logic-x (world-sector-logic world))))
     (GLfloat*-set! vertex-data 9021 (- (+ (player-y (world-player world)) (player-height (world-player world))) (sector-logic-y (world-sector-logic world))))))
@@ -437,13 +436,21 @@ end-of-shader
             (ctx (SDL_GL_CreateContext win)))
         (SDL_Log (string-append "SDL screen size: " (object->string screen-width) " x " (object->string screen-height)))
         ;; OpenGL
-        (SDL_Log (string-append "OpenGL Version: " (unsigned-char*->string (glGetString GL_VERSION))))
+        (SDL_Log (string-append "OpenGL Version: " (*->string (glGetString GL_VERSION))))
         (SDL_Log "Using API OpenGL Version: 2.1 - GL Shading Language Version: 1.2")
         ;; Glew: initialize extensions
         (glewInit)
         ;; OpenGL viewport
         (glViewport 0 0 screen-width screen-height)
         (glScissor 0 0 screen-width screen-height)
+
+        ;; SDL TTF
+        ;; (unless (= 0 (TTF_Init))
+        ;;         (fusion:error (string-append "Unable to initialize True Type Fonts system -- " (TTF_GetError))))
+
+        ;; SDL Mixer
+        (unless (= 0 (Mix_OpenAudio MIX_DEFAULT_FREQUENCY MIX_DEFAULT_FORMAT 2 1024))
+                (fusion:error (string-append "Unable to initialize sound system -- " (Mix_GetError))))
         
         ;; PRECHARGE stuff
         ;;(create-level vertex-data world)
@@ -469,21 +476,34 @@ end-of-shader
                (shaders (list (fusion:create-shader GL_VERTEX_SHADER vertex-shader)
                               (fusion:create-shader GL_FRAGMENT_SHADER fragment-shader)))
                (shader-program (fusion:create-program shaders))
-               (texture-image* (SDL_LoadBMP "assets/128x32.bmp")))
+               ;;(texture-image* (SDL_LoadBMP "assets/128x32.bmp"))
+               (texture-image* (or (IMG_Load "assets/PlantillaPF1.png")
+                                       (fusion:error (string-append "Unable to load texture image -- " (IMG_GetError)))))
+               (background-music* (or (Mix_LoadMUS "assets/Daft-Punk-Get-Lucky.ogg")
+                                      (fusion:error (string-append "Unable to load OGG music -- " (Mix_GetError)))))
+               (jump-sound* (or (Mix_LoadWAV "assets/Jump.wav")
+                                (fusion:error (string-append "Unable to load WAV chunk -- " (Mix_GetError)))))
+               (explosion-sound* (or (Mix_LoadWAV "assets/Explosion.wav")
+                                (fusion:error (string-append "Unable to load WAV chunk -- " (Mix_GetError)))))
+               ;; (touch-ground-sound* (or (Mix_LoadWAV "assets/Jump.wav")
+               ;;                  (fusion:error (string-append "Unable to load WAV chunk -- " (Mix_GetError)))))
+               )
           ;; Clean up shaders once the program has been compiled and linked
           (for-each glDeleteShader shaders)
 
           ;; Texture
           (glGenTextures 1 texture-id*)
           (glBindTexture GL_TEXTURE_2D (*->GLuint texture-id*))
-          (glTexImage2D GL_TEXTURE_2D 0 3
+          (glTexImage2D GL_TEXTURE_2D 0 GL_RGBA
                         (SDL_Surface-w texture-image*) (SDL_Surface-h texture-image*)
-                        0 GL_BGR GL_UNSIGNED_BYTE
+                        0 GL_RGBA GL_UNSIGNED_BYTE
                         (SDL_Surface-pixels texture-image*))
           (glTexParameteri GL_TEXTURE_2D GL_TEXTURE_BASE_LEVEL 0)
           (glTexParameteri GL_TEXTURE_2D GL_TEXTURE_MAX_LEVEL 0)
           (glBindTexture GL_TEXTURE_2D 0)
           (SDL_FreeSurface texture-image*)
+          ;; (glEnable GL_BLEND)
+          ;; (glBlendFunc GL_SRC_ALPHA GL_ONE_MINUS_SRC_ALPHA)
 
           ;; Uniforms
           (glUseProgram shader-program)
@@ -532,7 +552,7 @@ end-of-shader
             ;;(create-level vertex-data world)
             
             ;; Game loop
-            (let ((event* (alloc-SDL_Event 1)))
+            (let ((event* (alloc-SDL_Event)))
               (call/cc
                (lambda (quit)
                  (let main-loop ()
@@ -551,8 +571,11 @@ end-of-shader
                                         (world-tile-vector-set! world (read (open-input-file "level-one.dat")))
                                         (update-sector-vector (player-sector (world-player world)) vertex-data world)
                                         (player-init vertex-data world)
-                                        (world-game-state-set! world 'level-one))
+                                        (world-game-state-set! world 'level-one)
+                                        (unless (Mix_PlayMusic background-music* -1)
+                                                (fusion:error (string-append "Unable to play OGG music -- " (Mix_GetError)))))
                                        ((and (= key SDLK_SPACE) (not (eq? (world-game-state world) 'init-screen)) (eq? (player-is-collision? (world-player world)) #t))
+                                        (Mix_PlayChannel 1 jump-sound* 0)
                                         (case (player-gravity (world-player world))
                                           ((up)
                                            (player-is-collision?-set! (world-player world) #f)
@@ -562,10 +585,9 @@ end-of-shader
                                            (player-gravity-set! (world-player world) 'up))))
                                        ((and (= key SDLK_RIGHT) (not (eq? (world-game-state world) 'init-screen)))
                                         (player-horizontal-state-set! (world-player world) 'right))
-                                       
                                        ((and (= key SDLK_LEFT) (not (eq? (world-game-state world) 'init-screen))) 
                                         (player-horizontal-state-set! (world-player world) 'left))
-                                       
+
                                        (else
                                         (SDL_LogVerbose SDL_LOG_CATEGORY_APPLICATION (string-append "Key: " (number->string key)))))))
                               ((= event-type SDL_KEYUP)
@@ -587,7 +609,7 @@ end-of-shader
                    
                    ;;(call-with-output-file "sector1-level1.dat" (lambda (f) (display (list->f32vector(world-vertex-vector world)) f)))
                    ;;(pp vertex-data)
-                   (println (string-append "player: " (object->string (world-player world)) " ; playerx: "  (object->string(GLfloat*-ref vertex-data 9008))))
+                   ;;(println (string-append "player: " (object->string (world-player world)) " ; playerx: "  (object->string(GLfloat*-ref vertex-data 9008))))
                    (game-updater vertex-data world)
                    
                    ;; -- Draw --
@@ -615,7 +637,6 @@ end-of-shader
                    
                    (SDL_GL_SwapWindow win)
                    (main-loop))))
-              (free event*)
               (SDL_LogInfo SDL_LOG_CATEGORY_APPLICATION "Bye.")
               (SDL_GL_DeleteContext ctx)
               (SDL_DestroyWindow win)

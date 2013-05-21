@@ -6,4 +6,7 @@
    (core: assert-macros))
   (load
    (math: matrix)
-   (fusion: core))))
+   (fusion: core)
+   (sdl2: sdl2-image)
+   (sdl2: sdl2-ttf)
+   (sdl2: sdl2-mixer))))
