@@ -40,47 +40,149 @@ end-of-shader
 ;;TODO 
 ;;ANIMACIONES 
 
-(define-type world (game-state unprintable:) player (tile-vector unprintable:) (sector-logic unprintable:) (vertex-vector unprintable:) (sounds unprintable:))
+(define-type world (game-state unprintable:) player (tile-vector unprintable:) (collision-vector unprintable:) (sector-logic unprintable:) (vertex-vector unprintable:) (sounds unprintable:))
 (define-type sounds jump-sound* touch-ground-sound* explosion-sound*)
 (define-type sector-logic x y)
-(define-type player x y  (width unprintable:) (height unprintable:) horizontal-state vertical-state lives gravity is-collision? is-dead? sector)
+(define-type player x y  (width unprintable:) (height unprintable:) horizontal-state previous-horizontal-state vertical-state lives gravity is-collision? is-dead? sector animation-counter)
 (define (make-world/init) 
-  (make-world 'init-screen (make-player 40. 650. 24. 48. 'idle 'idle  3. 'down #f #f '1) (read (open-input-file "level-one.dat")) (make-sector-logic 0. 0.) '() (make-sounds 0. 0. 0.)))
+  (make-world 'init-screen (make-player 40. 650. 24. 48. 'idle 'idle 'idle  3. 'down #f #f '1 0.) (read (open-input-file "level-test/level-test.dat")) (read (open-input-file "level-test/level-collisions-test.dat")) (make-sector-logic 0. 0.) '() (make-sounds 0. 0. 0.)))
 (define tile-size 32.)
 
 
-(define (insert-full-bmp x y width height world)
-  (let ((lst (list x y 0.0 0.0
-                   x (+ y height) 0.0 1.0
-                   (+ x width) (+ y height) 1.0 1.0
-                   (+ x width) y 1.0 0.0 )))
-    (world-vertex-vector-set! world 
-                              (append (world-vertex-vector world) 
-                                      lst))))
+(define-syntax vertex-data-swap!
+  (syntax-rules ()
+    ((_ vertex-data a b)
+     (let ((a-value (GLfloat*-ref vertex-data a))
+           (b-value (GLfloat*-ref vertex-data b)))
+       (GLfloat*-set! vertex-data a b-value)
+       (GLfloat*-set! vertex-data b a-value)))))
 
-(define (insert-section-bmp x y width height section world)
-  (world-vertex-vector-set! world 
-                            (append (world-vertex-vector world) 
-                                    (list x y (* 0.0625 section) 0.1875
-                                          x (+ y height) (* 0.0625 section) 0.25
-                                          (+ x width) (+ y height) (+ (* 0.0625 section) 0.0625) 0.25
-                                          (+ x width) y (+ 0.25  (* 0.0625 section)) 0.1875))))
-;;0,0625
-;;0,0365
-(define (player-init vertex-data world)
-  (begin
-    ;;Vertice 1
-    (GLfloat*-set! vertex-data 9010 0.0)
-    (GLfloat*-set! vertex-data 9011 0.0)
-    ;;Vertice 2
-    (GLfloat*-set! vertex-data 9014 0.05)
-    (GLfloat*-set! vertex-data 9015 0.0)
-    ;;Vertice 3
-    (GLfloat*-set! vertex-data 9018 0.05)
-    (GLfloat*-set! vertex-data 9019 0.0625)
-    ;;Vertice 4
-    (GLfloat*-set! vertex-data 9022 0.014)
-    (GLfloat*-set! vertex-data 9023 0.0625)))
+(define (player-swap-vertical vertex-data)
+  (vertex-data-swap! vertex-data 48002 48014)
+  (vertex-data-swap! vertex-data 48003 48015)
+  (vertex-data-swap! vertex-data 48006 48010)
+  (vertex-data-swap! vertex-data 48007 48011))
+
+;; Selects one of the 3 sprites of Pink Face, in the direction intended
+;; down-right | down-left | up-right | up-left
+(define (player-sprite-selector direction position vertex-data world)
+  (let ((player-sprite-selector-template
+         (lambda (v1a v1b v2a v2b v3a v3b v4a v4b)
+           ;;Vertice 1
+           (GLfloat*-set! vertex-data 48002 (+ v1a (* 0.0625 position)))
+           (GLfloat*-set! vertex-data 48003 v1b)
+           ;;Vertice 2
+           (GLfloat*-set! vertex-data 48006 (+ v2a (* 0.0625 position)))
+           (GLfloat*-set! vertex-data 48007 v2b)
+           ;;Vertice 3
+           (GLfloat*-set! vertex-data 48010 (+ v3a (* 0.0625 position)))
+           (GLfloat*-set! vertex-data 48011 v3b)
+           ;;Vertice 4
+           (GLfloat*-set! vertex-data 48014 (+ v4a (* 0.0625 position)))
+           (GLfloat*-set! vertex-data 48015 v4b))))
+
+    (case direction 
+      ((down-right)
+       (player-sprite-selector-template 0.0000 0.0000
+                                        0.0625 0.0000
+                                        0.0625 0.0625
+                                        0.0000 0.0625))
+      ((down-left)
+       (player-sprite-selector-template 0.0625 0.0000
+                                        0.0000 0.0000
+                                        0.0000 0.0625
+                                        0.0625 0.0625))
+      ((up-right)
+       (player-sprite-selector-template 0.0000 0.0625
+                                        0.0625 0.0625
+                                        0.0625 0.0000
+                                        0.0000 0.0000))
+      ((up-left)
+       (player-sprite-selector-template 0.0625 0.0625
+                                        0.0000 0.0625
+                                        0.0000 0.0000
+                                        0.0625 0.0000)))))
+
+(define (player-animation-updater vertex-data world)
+  (when (eq? (player-horizontal-state (world-player world)) 'idle)
+                (case (player-gravity (world-player world))
+                  ((up)                   
+                   (case (player-previous-horizontal-state (world-player world))
+                     ((left)
+                      (player-sprite-selector 'up-left 0. vertex-data world))
+                     ((right)
+                      (player-sprite-selector 'up-right 0. vertex-data world))))
+                  ((down)                   
+                   (case (player-previous-horizontal-state (world-player world))
+                     ((left)
+                      (player-sprite-selector 'down-left 0. vertex-data world))
+                     ((right)
+                      (player-sprite-selector 'down-right 0. vertex-data world))))))
+  
+  (unless (eq? (player-is-collision? (world-player world)) #f)
+          
+          (if (>= (player-animation-counter (world-player world))  40.)
+                      (player-animation-counter-set! (world-player world) 0.)
+                      (player-animation-counter-set! (world-player world) (+ (player-animation-counter (world-player world)) 1.)))
+          
+          (when (eq? (player-horizontal-state (world-player world)) 'left)
+                (case (player-gravity (world-player world))
+                  ((up)                   
+                   (when (> (player-animation-counter (world-player world)) 30)
+                         (player-sprite-selector 'up-left 0. vertex-data world))
+                   (when (and 
+                          (< (player-animation-counter (world-player world)) 30)
+                          (> (player-animation-counter (world-player world)) 20))
+                         (player-sprite-selector 'up-left 2. vertex-data world))
+                   (when (and 
+                          (< (player-animation-counter (world-player world)) 20)
+                          (> (player-animation-counter (world-player world)) 10))
+                         (player-sprite-selector 'up-left 0. vertex-data world))
+                   (when (< (player-animation-counter (world-player world)) 10)
+                         (player-sprite-selector 'up-left 1. vertex-data world)))
+                  
+                  ((down)                   
+                   (when (> (player-animation-counter (world-player world)) 30)
+                         (player-sprite-selector 'down-left 0. vertex-data world))
+                   (when (and 
+                          (< (player-animation-counter (world-player world)) 30)
+                          (> (player-animation-counter (world-player world)) 20))
+                         (player-sprite-selector 'down-left 2. vertex-data world))
+                   (when (and 
+                          (< (player-animation-counter (world-player world)) 20)
+                          (> (player-animation-counter (world-player world)) 10))
+                         (player-sprite-selector 'down-left 0. vertex-data world))
+                   (when (< (player-animation-counter (world-player world)) 10)
+                         (player-sprite-selector 'down-left 1. vertex-data world)))))
+
+          (when (eq? (player-horizontal-state (world-player world)) 'right)
+                (case (player-gravity (world-player world))
+                  ((up)                   
+                   (when (> (player-animation-counter (world-player world)) 30)
+                         (player-sprite-selector 'up-right 0. vertex-data world))
+                   (when (and 
+                          (< (player-animation-counter (world-player world)) 30)
+                          (> (player-animation-counter (world-player world)) 20))
+                         (player-sprite-selector 'up-right 2. vertex-data world))
+                   (when (and 
+                          (< (player-animation-counter (world-player world)) 20)
+                          (> (player-animation-counter (world-player world)) 10))
+                         (player-sprite-selector 'up-right 0. vertex-data world))
+                   (when (< (player-animation-counter (world-player world)) 10)
+                         (player-sprite-selector 'up-right 1. vertex-data world)))
+                  ((down)                   
+                   (when (> (player-animation-counter (world-player world)) 30)
+                         (player-sprite-selector 'down-right 0. vertex-data world))
+                   (when (and 
+                          (< (player-animation-counter (world-player world)) 30)
+                          (> (player-animation-counter (world-player world)) 20))
+                         (player-sprite-selector 'down-right 2. vertex-data world))
+                   (when (and 
+                          (< (player-animation-counter (world-player world)) 20)
+                          (> (player-animation-counter (world-player world)) 10))
+                         (player-sprite-selector 'down-right 0. vertex-data world))
+                   (when (< (player-animation-counter (world-player world)) 10)
+                         (player-sprite-selector 'down-right 1. vertex-data world)))))))
 
 (define (update-sector-coordinates world)
   (case 
@@ -107,6 +209,7 @@ end-of-shader
     (unless
      (eq? (player-sector (world-player world)) '1)
      (player-sector-set! (world-player world) '1)
+     
      (update-sector-vector (player-sector (world-player world)) vertex-data world)))
    ((and (> (player-x (world-player world)) 1280.)
          (< (player-x (world-player world)) 2400.)
@@ -135,265 +238,296 @@ end-of-shader
 
 (define (player-ground-collision world)
   (when (and(eq? (player-gravity (world-player world)) 'up) 
-            (eq? (vector-ref (vector-ref (world-tile-vector world) 
+            (eq? (vector-ref (vector-ref (world-collision-vector world) 
                                          (inexact->exact(floor (/ (- (player-y (world-player world)) 3.) tile-size)))) 
-                             (inexact->exact(floor (/  (player-x (world-player world)) tile-size))))  'ground)
-            (eq? (vector-ref (vector-ref (world-tile-vector world)
+                             (inexact->exact(floor (/  (player-x (world-player world)) tile-size)))) 'ground)
+            (eq? (vector-ref (vector-ref (world-collision-vector world)
                                          (inexact->exact(floor (/ (- (player-y (world-player world)) 3.) tile-size))))
                              (inexact->exact(ceiling (/  ( + (player-x (world-player world)) 10. ) tile-size)))) 'ground))
         (player-is-collision?-set! (world-player world) #t))
 
   (when (and (eq? (player-gravity (world-player world)) 'down)
-             (eq? (vector-ref (vector-ref (world-tile-vector world) 
+             (eq? (vector-ref (vector-ref (world-collision-vector world) 
                                           (inexact->exact (floor (/ (+ (+ (player-y (world-player world)) (player-height (world-player world))) 3.) tile-size)))) 
                               (inexact->exact (floor (/ (-(player-x (world-player world)) 3.) tile-size)))) 'ground)
-             (eq? (vector-ref (vector-ref (world-tile-vector world) 
+             (eq? (vector-ref (vector-ref (world-collision-vector world) 
                                           (inexact->exact(floor (/ (+ (+ (player-y (world-player world)) (player-height (world-player world))) 3.) tile-size)))) 
                               (inexact->exact(ceiling (/ (- (player-x (world-player world)) 10.) tile-size)))) 'ground))
         (player-is-collision?-set! (world-player world) #t)))
 
-(define (player-death-collision world)
-  (when (or (eq? (vector-ref (vector-ref (world-tile-vector world) 
+(define (player-death-collision explosion-sound* world)
+  (when (or (eq? (vector-ref (vector-ref (world-collision-vector world) 
                                          (inexact->exact(floor (/ (- (player-y (world-player world)) 3.) tile-size)))) 
                              (inexact->exact(floor (/  (player-x (world-player world)) tile-size)))) 'spikes)
-            (eq? (vector-ref (vector-ref (world-tile-vector world)
+            (eq? (vector-ref (vector-ref (world-collision-vector world)
                                          (inexact->exact(floor (/ (- (player-y (world-player world)) 3.) tile-size)))) 
                              (inexact->exact(ceiling (/  ( - (player-x (world-player world)) 10. ) tile-size)))) 'spikes)
-            (eq? (vector-ref (vector-ref (world-tile-vector world) 
+            (eq? (vector-ref (vector-ref (world-collision-vector world) 
                                          (inexact->exact(floor (/ (+ (+ (player-y (world-player world)) (player-height (world-player world))) 3.) tile-size)))) 
                              (inexact->exact(floor (/ (+(player-x (world-player world)) 3.) tile-size)))) 'spikes)
-            (eq? (vector-ref (vector-ref (world-tile-vector world) 
+            (eq? (vector-ref (vector-ref (world-collision-vector world) 
                                          (inexact->exact(floor (/ (+ (+ (player-y (world-player world)) (player-height (world-player world))) 3.) tile-size)))) 
                              (inexact->exact(ceiling (/ (- (player-x (world-player world)) 10.) tile-size)))) 'spikes)
-            (eq? (vector-ref (vector-ref (world-tile-vector world) 
+            (eq? (vector-ref (vector-ref (world-collision-vector world) 
                                          (inexact->exact (floor (/ (player-y (world-player world)) tile-size)))) 
                              (inexact->exact (floor (/ (-(player-x (world-player world)) 3.) tile-size)))) 'spikes)
-            (eq? (vector-ref (vector-ref (world-tile-vector world) 
+            (eq? (vector-ref (vector-ref (world-collision-vector world) 
                                          (inexact->exact (ceiling (/ (player-y (world-player world)) tile-size)))) 
                              (inexact->exact(floor (/ (-(player-x (world-player world)) 3.) tile-size)))) 'spikes)
-            (eq? (vector-ref (vector-ref (world-tile-vector world)
+            (eq? (vector-ref (vector-ref (world-collision-vector world)
                                          (inexact->exact (floor (/ (+ (player-y (world-player world)) (player-height (world-player world))) tile-size)))) 
                              (inexact->exact(floor (/ (- (player-x (world-player world)) 3.) tile-size)))) 'spikes)
-            (eq? (vector-ref (vector-ref (world-tile-vector world) 
+            (eq? (vector-ref (vector-ref (world-collision-vector world) 
                                          (inexact->exact(floor (/ (player-y (world-player world)) tile-size)))) 
                              (inexact->exact(ceiling (/ (-(player-x (world-player world)) 3.) tile-size)))) 'spikes)
-            (eq? (vector-ref (vector-ref (world-tile-vector world) 
+            (eq? (vector-ref (vector-ref (world-collision-vector world) 
                                          (inexact->exact(ceiling (/ (player-y (world-player world)) tile-size)))) 
                              (inexact->exact(ceiling (/ (-(player-x (world-player world)) 3.) tile-size)))) 'spikes)
-            (eq? (vector-ref (vector-ref (world-tile-vector world) 
+            (eq? (vector-ref (vector-ref (world-collision-vector world) 
                                          (inexact->exact(floor (/ (+(player-y (world-player world)) (player-height (world-player world))) tile-size)))) 
                              (inexact->exact(ceiling (/ (-(player-x (world-player world)) 3.) tile-size)))) 'spikes))
-       ;; (Mix_PlayChannel 1 explosion-sound* 0)
+        (Mix_PlayChannel 1 explosion-sound* 0)
         (player-is-dead?-set! (world-player world) #t)))
 
+(define (player-goal-collision vertex-data world)
+  (when (or (eq? (vector-ref (vector-ref (world-collision-vector world) 
+                                         (inexact->exact(floor (/ (- (player-y (world-player world)) 3.) tile-size)))) 
+                             (inexact->exact(floor (/  (player-x (world-player world)) tile-size)))) 'goal)
+            (eq? (vector-ref (vector-ref (world-collision-vector world)
+                                         (inexact->exact(floor (/ (- (player-y (world-player world)) 3.) tile-size)))) 
+                             (inexact->exact(ceiling (/  ( - (player-x (world-player world)) 10. ) tile-size)))) 'goal)
+            (eq? (vector-ref (vector-ref (world-collision-vector world) 
+                                         (inexact->exact(floor (/ (+ (+ (player-y (world-player world)) (player-height (world-player world))) 3.) tile-size)))) 
+                             (inexact->exact(floor (/ (+(player-x (world-player world)) 3.) tile-size)))) 'goal)
+            (eq? (vector-ref (vector-ref (world-collision-vector world) 
+                                         (inexact->exact(floor (/ (+ (+ (player-y (world-player world)) (player-height (world-player world))) 3.) tile-size)))) 
+                             (inexact->exact(ceiling (/ (- (player-x (world-player world)) 10.) tile-size)))) 'goal)
+            (eq? (vector-ref (vector-ref (world-collision-vector world) 
+                                         (inexact->exact (floor (/ (player-y (world-player world)) tile-size)))) 
+                             (inexact->exact (floor (/ (-(player-x (world-player world)) 3.) tile-size)))) 'goal)
+            (eq? (vector-ref (vector-ref (world-collision-vector world) 
+                                         (inexact->exact (ceiling (/ (player-y (world-player world)) tile-size)))) 
+                             (inexact->exact(floor (/ (-(player-x (world-player world)) 3.) tile-size)))) 'goal)
+            (eq? (vector-ref (vector-ref (world-collision-vector world)
+                                         (inexact->exact (floor (/ (+ (player-y (world-player world)) (player-height (world-player world))) tile-size)))) 
+                             (inexact->exact(floor (/ (- (player-x (world-player world)) 3.) tile-size)))) 'goal)
+            (eq? (vector-ref (vector-ref (world-collision-vector world) 
+                                         (inexact->exact(floor (/ (player-y (world-player world)) tile-size)))) 
+                             (inexact->exact(ceiling (/ (-(player-x (world-player world)) 3.) tile-size)))) 'goal)
+            (eq? (vector-ref (vector-ref (world-collision-vector world) 
+                                         (inexact->exact(ceiling (/ (player-y (world-player world)) tile-size)))) 
+                             (inexact->exact(ceiling (/ (-(player-x (world-player world)) 3.) tile-size)))) 'goal)
+            (eq? (vector-ref (vector-ref (world-collision-vector world) 
+                                         (inexact->exact(floor (/ (+(player-y (world-player world)) (player-height (world-player world))) tile-size)))) 
+                             (inexact->exact(ceiling (/ (-(player-x (world-player world)) 3.) tile-size)))) 'goal))
+        (player-x-set! (world-player world) 1270.)
+        (player-y-set! (world-player world) 740.)
+        (world-tile-vector-set! world (read (open-input-file "level-two/level-two.dat")))
+        (world-collision-vector-set! world (read (open-input-file "level-two/level-collisions-two.dat")))
+        (update-sector-vector (player-sector (world-player world)) vertex-data world)
+        (player-sprite-selector 'down-left 0. vertex-data world)
+        (world-game-state-set! world 'level-two)))
 
 (define (player-position-updater vertex-data world)
   (when (and (eq? (player-gravity (world-player world)) 'up) 
-             (not(eq? (vector-ref (vector-ref (world-tile-vector world) 
+             (not(eq? (vector-ref (vector-ref (world-collision-vector world) 
                                               (inexact->exact(floor (/ (- (player-y (world-player world)) 3.) tile-size)))) 
                                   (inexact->exact(floor (/  (player-x (world-player world)) tile-size)))) 'ground))
-             (not(eq? (vector-ref (vector-ref (world-tile-vector world)
+             (not(eq? (vector-ref (vector-ref (world-collision-vector world)
                                               (inexact->exact(floor (/ (- (player-y (world-player world)) 3.) tile-size)))) 
                                   (inexact->exact(ceiling (/  ( - (player-x (world-player world)) 10. ) tile-size)))) 'ground)))
         (player-y-set! (world-player world) ( - (player-y (world-player world)) 3.))
         (player-movement-increment 'up vertex-data))
 
-  (when (and (eq? (player-gravity (world-player world)) 'down) 
-             (not(eq? (vector-ref (vector-ref (world-tile-vector world) 
+  (when (and (eq? (player-gravity (world-player world)) 'down)
+             (not(eq? (vector-ref (vector-ref (world-collision-vector world) 
                                               (inexact->exact(floor (/ (+ (+ (player-y (world-player world)) (player-height (world-player world))) 3.) tile-size)))) 
-                                  (inexact->exact(floor (/ (+(player-x (world-player world)) 3.) tile-size)))) 'ground))
-             (not(eq? (vector-ref (vector-ref (world-tile-vector world) 
+                                  (inexact->exact(floor (/ (+(player-x (world-player world)) 3.) tile-size))))  'ground))
+             (not(eq? (vector-ref (vector-ref (world-collision-vector world) 
                                               (inexact->exact(floor (/ (+ (+ (player-y (world-player world)) (player-height (world-player world))) 3.) tile-size)))) 
                                   (inexact->exact(ceiling (/ (- (player-x (world-player world)) 10.) tile-size)))) 'ground)))
         (player-y-set! (world-player world) ( + (player-y (world-player world)) 3.))
         (player-movement-increment 'down vertex-data))
 
   (when (and(eq? (player-horizontal-state (world-player world)) 'left)
-            (not(eq? (vector-ref (vector-ref (world-tile-vector world) 
+            (not(eq? (vector-ref (vector-ref (world-collision-vector world) 
                                              (inexact->exact (floor (/ (player-y (world-player world)) tile-size)))) 
                                  (inexact->exact (floor (/ (-(player-x (world-player world)) 3.) tile-size)))) 'ground))
-            (not(eq? (vector-ref (vector-ref (world-tile-vector world) 
+            (not(eq? (vector-ref (vector-ref (world-collision-vector world) 
                                              (inexact->exact (ceiling (/ (player-y (world-player world)) tile-size)))) 
                                  (inexact->exact(floor (/ (-(player-x (world-player world)) 3.) tile-size)))) 'ground))
-            (not(eq? (vector-ref (vector-ref (world-tile-vector world)
+            (not(eq? (vector-ref (vector-ref (world-collision-vector world)
                                              (inexact->exact (floor (/ (+ (player-y (world-player world)) (player-height (world-player world))) tile-size)))) 
                                  (inexact->exact(floor (/ (- (player-x (world-player world)) 3.) tile-size)))) 'ground)))
         (player-x-set! (world-player world) ( - (player-x (world-player world)) 3.))
         (player-movement-increment 'left vertex-data))
 
   (when (and(eq? (player-horizontal-state (world-player world)) 'right)
-            (not(eq? (vector-ref (vector-ref (world-tile-vector world) 
+            (not(eq? (vector-ref (vector-ref (world-collision-vector world) 
                                              (inexact->exact(floor (/ (player-y (world-player world)) tile-size)))) 
                                  (inexact->exact(ceiling (/ (-(player-x (world-player world)) 3.) tile-size)))) 'ground))
-            (not(eq? (vector-ref (vector-ref (world-tile-vector world) 
+            (not(eq? (vector-ref (vector-ref (world-collision-vector world) 
                                              (inexact->exact(ceiling (/ (player-y (world-player world)) tile-size)))) 
                                  (inexact->exact(ceiling (/ (-(player-x (world-player world)) 3.) tile-size)))) 'ground))
-            (not(eq? (vector-ref (vector-ref (world-tile-vector world) 
+            (not(eq? (vector-ref (vector-ref (world-collision-vector world) 
                                              (inexact->exact(floor (/ (+(player-y (world-player world)) (player-height (world-player world))) tile-size)))) 
                                  (inexact->exact(ceiling (/ (-(player-x (world-player world)) 3.) tile-size)))) 'ground)))
         (player-x-set! (world-player world) ( + (player-x (world-player world)) 3.))
         (player-movement-increment 'right vertex-data)))
 
 (define (player-sector-updater vertex-data world)
-  (begin
-    (GLfloat*-set! vertex-data 9008 (- (player-x (world-player world)) (sector-logic-x (world-sector-logic world))))
-    (GLfloat*-set! vertex-data 9009 (- (- (+ (player-y (world-player world)) (player-height (world-player world))) 48.) (sector-logic-y (world-sector-logic world))))
-    (GLfloat*-set! vertex-data 9012 (- (+ (player-x (world-player world)) 32.) (sector-logic-x (world-sector-logic world))))
-    (GLfloat*-set! vertex-data 9013 (- (- (+ (player-y (world-player world)) (player-height (world-player world))) 48.) (sector-logic-y (world-sector-logic world))))
-    (GLfloat*-set! vertex-data 9016 (- (+ (player-x (world-player world)) 32.) (sector-logic-x (world-sector-logic world))))
-    (GLfloat*-set! vertex-data 9017 (- (+ (player-y (world-player world)) (player-height (world-player world)))(sector-logic-y (world-sector-logic world))))
-    (GLfloat*-set! vertex-data 9020 (- (player-x (world-player world)) (sector-logic-x (world-sector-logic world))))
-    (GLfloat*-set! vertex-data 9021 (- (+ (player-y (world-player world)) (player-height (world-player world))) (sector-logic-y (world-sector-logic world))))))
+  (GLfloat*-set! vertex-data 48000 (-(- (player-x (world-player world)) (sector-logic-x (world-sector-logic world))) 15.))
+  (GLfloat*-set! vertex-data 48001 (- (- (+ (player-y (world-player world)) (player-height (world-player world))) 48.) (sector-logic-y (world-sector-logic world))))
+  (GLfloat*-set! vertex-data 48004 (-(+(- (+ (player-x (world-player world)) 32.) (sector-logic-x (world-sector-logic world))) 24.)15.))
+  (GLfloat*-set! vertex-data 48005 (- (- (+ (player-y (world-player world)) (player-height (world-player world))) 48.) (sector-logic-y (world-sector-logic world))))
+  (GLfloat*-set! vertex-data 48008 (-(+(- (+ (player-x (world-player world)) 32.) (sector-logic-x (world-sector-logic world))) 24.)15.))
+  (GLfloat*-set! vertex-data 48009 (- (+ (player-y (world-player world)) (player-height (world-player world)))(sector-logic-y (world-sector-logic world))))
+  (GLfloat*-set! vertex-data 48012 (-(- (player-x (world-player world)) (sector-logic-x (world-sector-logic world)))15.))
+  (GLfloat*-set! vertex-data 48013 (- (+ (player-y (world-player world)) (player-height (world-player world))) (sector-logic-y (world-sector-logic world)))))
 
 (define (player-movement-increment direction vertex-data)
   (let ((GLfloat*-increment
          (lambda (n x) (GLfloat*-set! vertex-data n (+ (GLfloat*-ref vertex-data n) x)))))
     (case direction
       ((right)
-       (GLfloat*-increment 9008 3.0)
-       (GLfloat*-increment 9012 3.0)
-       (GLfloat*-increment 9016 3.0)
-       (GLfloat*-increment 9020 3.0)
-       (GLfloat*-increment 9024 3.0)
-       (GLfloat*-increment 9028 3.0)
-       (GLfloat*-increment 9032 3.0)
-       (GLfloat*-increment 9036 3.0))
+       (GLfloat*-increment 48000 3.0)
+       (GLfloat*-increment 48004 3.0)
+       (GLfloat*-increment 48008 3.0)
+       (GLfloat*-increment 48012 3.0)
+       (GLfloat*-increment 48016 3.0)
+       (GLfloat*-increment 48020 3.0)
+       (GLfloat*-increment 48024 3.0)
+       (GLfloat*-increment 48028 3.0))
       ((left)
-       (GLfloat*-increment 9008 -3.0)
-       (GLfloat*-increment 9012 -3.0)
-       (GLfloat*-increment 9016 -3.0)
-       (GLfloat*-increment 9020 -3.0)
-       (GLfloat*-increment 9024 -3.0)
-       (GLfloat*-increment 9028 -3.0)
-       (GLfloat*-increment 9032 -3.0)
-       (GLfloat*-increment 9036 -3.0))
+       (GLfloat*-increment 48000 -3.0)
+       (GLfloat*-increment 48004 -3.0)
+       (GLfloat*-increment 48008 -3.0)
+       (GLfloat*-increment 48012 -3.0)
+       (GLfloat*-increment 48016 -3.0)
+       (GLfloat*-increment 48020 -3.0)
+       (GLfloat*-increment 48024 -3.0)
+       (GLfloat*-increment 48028 -3.0))
       ((down)
-       (GLfloat*-increment 9009 3.0)
-       (GLfloat*-increment 9013 3.0)
-       (GLfloat*-increment 9017 3.0)
-       (GLfloat*-increment 9021 3.0)
-       (GLfloat*-increment 9025 3.0)
-       (GLfloat*-increment 9029 3.0)
-       (GLfloat*-increment 9033 3.0)
-       (GLfloat*-increment 9037 3.0))
+       (GLfloat*-increment 48001 3.0)
+       (GLfloat*-increment 48005 3.0)
+       (GLfloat*-increment 48009 3.0)
+       (GLfloat*-increment 48013 3.0)
+       (GLfloat*-increment 48017 3.0)
+       (GLfloat*-increment 48021 3.0)
+       (GLfloat*-increment 48025 3.0)
+       (GLfloat*-increment 48029 3.0))
       ((up)
-       (GLfloat*-increment 9009 -3.0)
-       (GLfloat*-increment 9013 -3.0)
-       (GLfloat*-increment 9017 -3.0)
-       (GLfloat*-increment 9021 -3.0)
-       (GLfloat*-increment 9025 -3.0)
-       (GLfloat*-increment 9029 -3.0)
-       (GLfloat*-increment 9033 -3.0)
-       (GLfloat*-increment 9037 -3.0)))))
+       (GLfloat*-increment 48001 -3.0)
+       (GLfloat*-increment 48005 -3.0)
+       (GLfloat*-increment 48009 -3.0)
+       (GLfloat*-increment 48013 -3.0)
+       (GLfloat*-increment 48017 -3.0)
+       (GLfloat*-increment 48021 -3.0)
+       (GLfloat*-increment 48025 -3.0)
+       (GLfloat*-increment 48029 -3.0)))))
 
 (define (level-changer world)
   (when (eq? (player-is-dead? (world-player world)) #t)
         (world-game-state-set! world 'death)))
 
-(define (print-sector vec sector size world)
-  (let ((print-sector-template
-         (lambda (a b c d pos1 pos2)
-           (let recur ((counter1 a) (counter2 b))
-             (cond
-              ((and (eq? counter1 c) (eq? counter2 d))
-               (insert-section-bmp (pos1 counter2) (pos2 counter1) size size 2. world) )
-              ((eq? (vector-ref (vector-ref vec counter1) counter2) 'ground)
-               (insert-section-bmp (pos1 counter2) (pos2 counter1) size size 2. world)
-               (if (eq? counter2 d) 
-                   (recur (+ counter1 1) 0)
-                   (recur counter1 (+ counter2 1))))
-              ((eq? (vector-ref (vector-ref vec counter1) counter2) 'spikes)
-               (insert-section-bmp (pos1 counter2) (pos2 counter1) size size 1. world)
-               (if (eq? counter2 d)
-                   (recur (+ counter1 1) 0)
-                   (recur counter1 (+ counter2 1))))
-              
-              ;; ((eq? (vector-ref (vector-ref vec counter1) counter2) 'goal)
-              ;;  (cairo_set_source_rgba cr 1.0 0.0 1.0 1.0)
-              ;;  (cairo_rectangle cr (pos1 counter2) (pos2 counter1) size size)
-              ;;  (cairo_fill cr)
-              ;;  (if (eq? counter2 d)
-              ;;      (recur (+ counter1 1) 0)
-              ;;      (recur counter1 (+ counter2 1))))
-              ;; ((eq? (vector-ref (vector-ref vec counter1) counter2) 'key)
-              ;;  (cairo_set_source_rgba cr 1.0 1.0 0.0 1.0)
-              ;;  (cairo_rectangle cr (pos1 counter2) (pos2 counter1) size size)
-              ;;  (cairo_fill cr)
-              ;;  (if (eq? counter2 d)
-              ;;      (recur (+ counter1 1) 0)
-              ;;      (recur counter1 (+ counter2 1))))
-              ;; ((eq? (vector-ref (vector-ref vec counter1) counter2) 'start)
-              ;; (insert-section-bmp (pos1 counter2) (pos2 counter1) size size 3. world)
-              ;;  (if (eq? counter2 d)
-              ;;      (recur (+ counter1 1) 0)
-              ;;      (recur counter1 (+ counter2 1))))
-              ;; ((eq? (vector-ref (vector-ref vec counter1) counter2) 'inverter)
-              ;;  (cairo_set_source_rgba cr 1.0 0.0 1.0 1.0)
-              ;;  (cairo_rectangle cr (pos1 counter2) (pos2 counter1) size size)
-              ;;  (cairo_fill cr)
-              ;;  (if (eq? counter2 d)
-              ;;      (recur (+ counter1 1) 0)
-              ;;      (recur counter1 (+ counter2 1))))
-              (else
-               (if (eq? counter2 d) 
-                   (recur (+ counter1 1) 0) 
-                   (recur counter1 (+ counter2 1)))))))))
-   (case sector
-     ((1)
-      (print-sector-template 0 0 24 39
-                             (lambda (x) (* (exact->inexact x) size))
-                             (lambda (x) (* (exact->inexact x) size))))
-     ((2)
-      (print-sector-template 0 39 24 79
-                             (lambda (x) (-(* (exact->inexact x) size) 1280.))
-                             (lambda (x) (* (exact->inexact x) size))))
-     ((3)
-      (print-sector-template 23 0 46 40
-                             (lambda (x) (* (exact->inexact x) size))
-                             (lambda (x) (-(* (exact->inexact x) size) 752.))))
-     ((4)
-      (print-sector-template 23 39 46 79
-                             (lambda (x) (-(* (exact->inexact x) size) 1280.))
-                             (lambda (x) (-(* (exact->inexact x) size) 752.)))))))
+(define (sector-background-initializer vertex-data world)
+  (GLfloat*-set! vertex-data 0 0.)
+  (GLfloat*-set! vertex-data 1 0.)
+  (GLfloat*-set! vertex-data 4 1280.)
+  (GLfloat*-set! vertex-data 5 0.)
+  (GLfloat*-set! vertex-data 8 1280.)
+  (GLfloat*-set! vertex-data 9 752.)
+  (GLfloat*-set! vertex-data 12 0.)
+  (GLfloat*-set! vertex-data 13 752.))
+
+(define (sector-background-updater sector vertex-data world)
+  (let ((sector-background-updater-template 
+         (lambda (a b c d e f g h ) 
+           (GLfloat*-set! vertex-data 2 a)
+           (GLfloat*-set! vertex-data 3 b)
+           (GLfloat*-set! vertex-data 6 c)
+           (GLfloat*-set! vertex-data 7 d)
+           (GLfloat*-set! vertex-data 10 e)
+           (GLfloat*-set! vertex-data 11 f)
+           (GLfloat*-set! vertex-data 14 g)
+           (GLfloat*-set! vertex-data 15 h))))
+    (case sector
+      ((1)
+       (sector-background-updater-template 0.0000 0.3125
+                                           0.3125 0.3125
+                                           0.3125 0.49609375
+                                           0.0000 0.49609375))
+      ((2)
+       (sector-background-updater-template 0.3125 0.3125
+                                           0.6250 0.3125
+                                           0.6250 0.49609375
+                                           0.3125 0.49609375))
+      ((3)
+       (sector-background-updater-template 0.0000 0.49609375
+                                           0.3125 0.49609375
+                                           0.3125 0.67968750
+                                           0.0000 0.67968750))
+      ((4)
+       (sector-background-updater-template 0.3125 0.49609375
+                                           0.6250 0.49609375
+                                           0.6250 0.67968750
+                                           0.3125 0.67968750))
+      ((5)
+       (sector-background-updater-template 0.6250 0.3125
+                                           0.9375 0.3125
+                                           0.9375 0.49609375
+                                           0.6250 0.49609375))
+      ((6)
+       (sector-background-updater-template 0.6250 0.49609375
+                                           0.9375 0.49609375
+                                           0.9375 0.67968750
+                                           0.6250 0.67968750)))))
 
 (define (update-sector-vector sector vertex-data world)
-  (case sector
-    ((1)
-     (vector-copy (read (open-input-file "sector1-level1.dat")) vertex-data world))
-    ((2)
-     (vector-copy (read (open-input-file "sector2-level1.dat")) vertex-data world))
-    ((3)
-     (vector-copy (read (open-input-file "sector3-level1.dat")) vertex-data world))
-    ((4)
-     (vector-copy (read (open-input-file "sector4-level1.dat")) vertex-data world))))
-
+  (when 
+   (eq? (world-game-state world) 'level-one)
+   (case sector
+     ((1)
+      ;;(sector-background-updater '1 vertex-data world)
+      (vector-copy (read (open-input-file "level-one/level-one-sector1.dat")) vertex-data world))
+     ((2)
+      (vector-copy (read (open-input-file "level-one/level-one-sector2.dat")) vertex-data world))
+     ((3)
+      (vector-copy (read (open-input-file "level-one/level-one-sector3.dat")) vertex-data world))
+     ((4)
+      (vector-copy (read (open-input-file "level-one/level-one-sector4.dat")) vertex-data world))))
+  (when 
+   (eq? (world-game-state world) 'level-two)
+   (case sector
+     ((1)
+      ;;(sector-background-updater '1 vertex-data world)
+      (vector-copy (read (open-input-file "level-two/level-two-sector1.dat")) vertex-data world))
+     ((2)
+      (vector-copy (read (open-input-file "level-two/level-two-sector2.dat")) vertex-data world))
+     ((3)
+      (vector-copy (read (open-input-file "level-two/level-two-sector3.dat")) vertex-data world))
+     ((4)
+      (vector-copy (read (open-input-file "level-two/level-two-sector4.dat")) vertex-data world))))
+  )
 
 (define (vector-copy vector vertex-data world)
   (let recur ((counter 0))
     (cond
-     ((eq? counter 9000))
-     ((>= counter (f32vector-length vector))
+     ((eq? counter 70000))
+     ((>= counter  (f32vector-length vector))
       (GLfloat*-set! vertex-data counter 0.)
       (recur (+ counter 1)))
      (else
-      (GLfloat*-set! vertex-data counter (f32vector-ref vector counter))
-      (recur (+ counter 1))))))
-#;
-(define (vector-copy-f32vector vector index vertex-data-vector world)
-  (let recur ((counter index))
-    (cond
-     ((eq? counter (+ index 16)))
-     (else
-      (f32-vector-set! vertex-data-vector counter (f32vector-ref vector (- counter index)))
+      (GLfloat*-set! vertex-data counter (f32vector-ref vector counter ))
       (recur (+ counter 1))))))
 
-(define (create-level vertex-data world)
-  (world-tile-vector-set! world (read (open-input-file "/data/projects/editor-de-mapas/level-one.dat")))
-  (update-sector-vector (player-sector (world-player world)) vertex-data world)
-  (player-position-updater vertex-data world))
-
-(define (game-updater vertex-data world)
+(define (game-updater vertex-data explosion-sound* world)
   (case (world-game-state world)
+    ((init-screen)
+     (sector-background-initializer vertex-data world)
+     (sector-background-updater '5 vertex-data world))
+    ((instructions)
+     (sector-background-updater '6 vertex-data world))
     ((death)
      (player-is-dead?-set! (world-player world) #f)
      (world-game-state-set! world 'level-one)
@@ -411,8 +545,19 @@ end-of-shader
      (update-sector-coordinates world)
      (level-changer world)
      (player-position-updater vertex-data world)
+     (player-animation-updater vertex-data world)
      (player-ground-collision world)
-     (player-death-collision world))))
+     (player-death-collision explosion-sound* world)
+     (player-goal-collision vertex-data world))
+    ((level-two)
+     (sector-updater vertex-data world)
+     (player-sector-updater vertex-data world)
+     (update-sector-coordinates world)
+     (level-changer world)
+     (player-position-updater vertex-data world)
+     (player-animation-updater vertex-data world)
+     (player-ground-collision world)
+     (player-death-collision explosion-sound* world))))
 
 (define (main)
   (let ((init-screen-width 1280)
@@ -453,7 +598,6 @@ end-of-shader
                 (fusion:error (string-append "Unable to initialize sound system -- " (Mix_GetError))))
         
         ;; PRECHARGE stuff
-        ;;(create-level vertex-data world)
 
         ;; Generate programs, buffers, textures
         
@@ -468,26 +612,23 @@ end-of-shader
                (sampler-id* (alloc-GLuint* 1))
                
                ;; VECTOR
-               ;;(vertex-data-vector (list->f32vector (world-vertex-vector world)))
-               ;;(vertex-data-vector (read (open-input-file "sector1-level1.dat")))
-               (vertex-data-vector (make-f32vector 10000 0.))
+               (vertex-data-vector (make-f32vector 80000 0.))
 
                (vertex-data (f32vector->GLfloat* vertex-data-vector))
                (shaders (list (fusion:create-shader GL_VERTEX_SHADER vertex-shader)
                               (fusion:create-shader GL_FRAGMENT_SHADER fragment-shader)))
                (shader-program (fusion:create-program shaders))
                ;;(texture-image* (SDL_LoadBMP "assets/128x32.bmp"))
-               (texture-image* (or (IMG_Load "assets/PlantillaPF1.png")
+               (texture-image* (or (IMG_Load "assets/PlantillaPFGAME-FINAL.png")
                                        (fusion:error (string-append "Unable to load texture image -- " (IMG_GetError)))))
                (background-music* (or (Mix_LoadMUS "assets/Daft-Punk-Get-Lucky.ogg")
                                       (fusion:error (string-append "Unable to load OGG music -- " (Mix_GetError)))))
                (jump-sound* (or (Mix_LoadWAV "assets/Jump.wav")
                                 (fusion:error (string-append "Unable to load WAV chunk -- " (Mix_GetError)))))
-               (explosion-sound* (or (Mix_LoadWAV "assets/Explosion.wav")
+               (touch-ground-sound* (or (Mix_LoadWAV "assets/Jump.wav")
                                 (fusion:error (string-append "Unable to load WAV chunk -- " (Mix_GetError)))))
-               ;; (touch-ground-sound* (or (Mix_LoadWAV "assets/Jump.wav")
-               ;;                  (fusion:error (string-append "Unable to load WAV chunk -- " (Mix_GetError)))))
-               )
+               (explosion-sound* (or (Mix_LoadWAV "assets/Explosion.wav")
+                                (fusion:error (string-append "Unable to load WAV chunk -- " (Mix_GetError))))))
           ;; Clean up shaders once the program has been compiled and linked
           (for-each glDeleteShader shaders)
 
@@ -502,8 +643,8 @@ end-of-shader
           (glTexParameteri GL_TEXTURE_2D GL_TEXTURE_MAX_LEVEL 0)
           (glBindTexture GL_TEXTURE_2D 0)
           (SDL_FreeSurface texture-image*)
-          ;; (glEnable GL_BLEND)
-          ;; (glBlendFunc GL_SRC_ALPHA GL_ONE_MINUS_SRC_ALPHA)
+          (glEnable GL_BLEND)
+          (glBlendFunc GL_SRC_ALPHA GL_ONE_MINUS_SRC_ALPHA)
 
           ;; Uniforms
           (glUseProgram shader-program)
@@ -520,8 +661,8 @@ end-of-shader
           (let ((sampler-id (*->GLuint sampler-id*)))
             (glSamplerParameteri sampler-id GL_TEXTURE_WRAP_S GL_CLAMP_TO_EDGE)
             (glSamplerParameteri sampler-id GL_TEXTURE_WRAP_T GL_CLAMP_TO_EDGE)
-            (glSamplerParameteri sampler-id GL_TEXTURE_MAG_FILTER GL_NEAREST)
-            (glSamplerParameteri sampler-id GL_TEXTURE_MIN_FILTER GL_NEAREST))
+            (glSamplerParameteri sampler-id GL_TEXTURE_MAG_FILTER GL_LINEAR)
+            (glSamplerParameteri sampler-id GL_TEXTURE_MIN_FILTER GL_LINEAR))
           
           ;; Vertex Array Object
           (glGenBuffers 1 position-buffer-object-id*)
@@ -549,8 +690,6 @@ end-of-shader
             (glBindBuffer GL_ARRAY_BUFFER 0)
             (glBindVertexArray 0)
             
-            ;;(create-level vertex-data world)
-            
             ;; Game loop
             (let ((event* (alloc-SDL_Event)))
               (call/cc
@@ -568,14 +707,19 @@ end-of-shader
                                  (cond ((= key SDLK_ESCAPE)
                                         (quit))
                                        ((and (= key SDLK_SPACE) (eq? (world-game-state world) 'init-screen))
-                                        (world-tile-vector-set! world (read (open-input-file "level-one.dat")))
-                                        (update-sector-vector (player-sector (world-player world)) vertex-data world)
-                                        (player-init vertex-data world)
+                                        (world-game-state-set! world 'instructions))
+                                       ((and (= key SDLK_SPACE) (eq? (world-game-state world) 'instructions))
                                         (world-game-state-set! world 'level-one)
+                                        (world-tile-vector-set! world (read (open-input-file "level-one/level-one.dat")))
+                                        (world-collision-vector-set! world (read (open-input-file "level-one/level-collisions-one.dat")))
+                                        (update-sector-vector (player-sector (world-player world)) vertex-data world)
+                                        (player-sprite-selector 'down-right 0. vertex-data world)
+                                        
                                         (unless (Mix_PlayMusic background-music* -1)
                                                 (fusion:error (string-append "Unable to play OGG music -- " (Mix_GetError)))))
-                                       ((and (= key SDLK_SPACE) (not (eq? (world-game-state world) 'init-screen)) (eq? (player-is-collision? (world-player world)) #t))
+                                       ((and (= key SDLK_SPACE) (not (eq? (world-game-state world) 'init-screen))(eq? (player-is-collision? (world-player world)) #t))
                                         (Mix_PlayChannel 1 jump-sound* 0)
+                                        (player-swap-vertical vertex-data)
                                         (case (player-gravity (world-player world))
                                           ((up)
                                            (player-is-collision?-set! (world-player world) #f)
@@ -584,10 +728,16 @@ end-of-shader
                                            (player-is-collision?-set! (world-player world) #f)
                                            (player-gravity-set! (world-player world) 'up))))
                                        ((and (= key SDLK_RIGHT) (not (eq? (world-game-state world) 'init-screen)))
+                                        (player-previous-horizontal-state-set! (world-player world) 'right)
                                         (player-horizontal-state-set! (world-player world) 'right))
-                                       ((and (= key SDLK_LEFT) (not (eq? (world-game-state world) 'init-screen))) 
-                                        (player-horizontal-state-set! (world-player world) 'left))
-
+                                       ((and (= key SDLK_LEFT) (not (eq? (world-game-state world) 'init-screen)))
+                                        (player-previous-horizontal-state-set! (world-player world) 'left)
+                                        (player-horizontal-state-set! (world-player world) 'left)
+                                        (case (player-gravity (world-player world))
+                                          ((up)
+                                           (player-sprite-selector 'up-left 1. vertex-data world))
+                                          ((down)
+                                           (player-sprite-selector 'down-left 1. vertex-data world))))
                                        (else
                                         (SDL_LogVerbose SDL_LOG_CATEGORY_APPLICATION (string-append "Key: " (number->string key)))))))
                               ((= event-type SDL_KEYUP)
@@ -605,12 +755,9 @@ end-of-shader
                            (event-loop)))
 
                    ;; -- Game logic -- 
-                   ;;(world-vertex-vector-set! world '())
-                   
-                   ;;(call-with-output-file "sector1-level1.dat" (lambda (f) (display (list->f32vector(world-vertex-vector world)) f)))
-                   ;;(pp vertex-data)
-                   ;;(println (string-append "player: " (object->string (world-player world)) " ; playerx: "  (object->string(GLfloat*-ref vertex-data 9008))))
-                   (game-updater vertex-data world)
+
+                   ;; (println (string-append "animation-counter: " (object->string (player-animation-counter (world-player world)))))
+                   (game-updater vertex-data explosion-sound* world)
                    
                    ;; -- Draw --
                    (glClearColor 0.0 0.0 0.0 0.0)
